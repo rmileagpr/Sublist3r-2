@@ -1,198 +1,110 @@
-# Sublist3r ![Python](https://img.shields.io/badge/Python-3.6%2B-blue?logo=python&logoColor=white) [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-green.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html) [![Stars](https://img.shields.io/github/stars/aboul3la/Sublist3r?style=social)](https://github.com/aboul3la/Sublist3r/stargazers)
+# Sublist3r v3.0
 
-> **Sublist3r** is a fast and powerful Python tool designed for OSINT-based subdomain enumeration. It helps penetration testers, bug bounty hunters, and security researchers discover hidden subdomains for targeted domains. Sublist3r leverages multiple search engines (Google, Yahoo, Bing, Baidu, Ask) and passive sources (Netcraft, VirusTotal, ThreatCrowd, DNSdumpster, ReverseDNS, BufferOverRun, CertSpotter) to build comprehensive subdomain lists.
+Fast subdomain enumeration tool for penetration testers and bug bounty hunters.
 
-**Enhanced to v3.0 by [Shaheer Yasir](https://github.com/shaheeryasir) (2025):** Full Python 3 support, new passive engines (CertSpotter for Certificate Transparency logs, BufferOverRun for DNS intel), JSON output, improved performance, and VirusTotal API v3 integration.
+Enumerates subdomains using search engines (Google, Yahoo, Bing, Baidu, Ask) and passive sources (Netcraft, VirusTotal, DNSdumpster, SSL Certificates via crt.sh, BufferOverRun, PassiveDNS, CertSpotter). Includes integrated DNS brute-forcing via SubBrute and TCP port scanning.
 
-## 🚀 Features
-- **Multi-Engine Enumeration:** Supports 12+ search engines and passive sources for broad coverage.
-- **Brute-Force Integration:** Powered by [SubBrute](https://github.com/TheRook/subbrute) (v1.3) with optimized wordlists.
-- **Output Flexibility:** Text or JSON export; verbose real-time results.
-- **Port Scanning:** Built-in TCP port checks on discovered subdomains.
-- **Modular Design:** Easy to import as a Python library.
-- **Cross-Platform:** Works on Linux, macOS, and Windows (with colorama for enhanced output).
-- **Rate-Limited & Stealthy:** Configurable threads, sleeps, and proxies to avoid detection.
+## Requirements
 
-## 📦 Installation
+- Python 3.6+
+- Dependencies: `requests`, `dnspython`, `colorama`
 
-1. **Clone the Repository:**
-   ```
-   git clone https://github.com/aboul3la/Sublist3r.git
-   cd Sublist3r
-   ```
+## Installation
 
-2. **Install Dependencies:**
-   ```
-   pip install -r requirements.txt
-   ```
-   (Includes `requests>=2.25.0`, `dnspython>=2.0.0`, `colorama>=0.4.4`)
+```
+git clone https://github.com/aboul3la/Sublist3r.git
+cd Sublist3r
+pip install -r requirements.txt
+```
 
-3. **Optional: VirusTotal API Key:**
-   For unlimited scans, set `export VT_API_KEY=your_key_here`.
+Optional: set `VT_API_KEY` environment variable for unlimited VirusTotal lookups.
 
-> **Note:** Python 3.6+ required (tested up to 3.12). No Python 2 support.
+## Usage
 
-## 🔧 Usage
+```
+python sublist3r.py -d example.com
+```
 
-| Short Form | Long Form       | Description |
-|------------|-----------------|-------------|
-| `-d`      | `--domain`      | Domain name to enumerate subdomains of |
-| `-b`      | `--bruteforce`  | Enable the SubBrute bruteforce module |
-| `-p`      | `--ports`       | Scan found subdomains against specific TCP ports |
-| `-v`      | `--verbose`     | Enable verbose mode and display results in realtime |
-| `-t`      | `--threads`     | Number of threads for SubBrute bruteforce (default: 30) |
-| `-e`      | `--engines`     | Comma-separated list of search engines |
-| `-o`      | `--output`      | Save results to text file |
-| `-j`      | `--json`        | Save results to JSON file |
-| `-n`      | `--no-color`    | Output without color |
-| `-h`      | `--help`        | Show the help message and exit |
+### Options
+
+| Flag | Long | Description | Default |
+|------|------|-------------|---------|
+| `-d` | `--domain` | Target domain (required) | |
+| `-b` | `--bruteforce` | Enable SubBrute brute-force module | off |
+| `-p` | `--ports` | Scan subdomains against TCP ports (comma-separated) | |
+| `-v` | `--verbose` | Show results in real time | off |
+| `-t` | `--threads` | Thread count for brute-force | 30 (max 64) |
+| `-e` | `--engines` | Comma-separated engine list | all |
+| `-o` | `--output` | Save results to text file | |
+| `-j` | `--json` | Save results to JSON file | off |
+| `-n` | `--no-color` | Disable colored output | off |
+
+### Available Engines
+
+`google`, `bing`, `yahoo`, `ask`, `baidu`, `netcraft`, `dnsdumpster`, `virustotal`, `crt`, `bufferover`, `passivedns`, `certspotter`
 
 ### Examples
 
-* **Basic Enumeration:**
-  ```
-  python sublist3r.py -d example.com
-  ```
+```bash
+# Basic enumeration
+python sublist3r.py -d example.com
 
-* **With Port Scanning (80, 443):**
-  ```
-  python sublist3r.py -d example.com -p 80,443
-  ```
+# Verbose with port scan
+python sublist3r.py -v -d example.com -p 80,443
 
-* **Verbose Real-Time Results:**
-  ```
-  python sublist3r.py -v -d example.com
-  ```
+# Brute-force with JSON output
+python sublist3r.py -b -d example.com -j -o results.txt
 
-* **Enable Bruteforce:**
-  ```
-  python sublist3r.py -b -d example.com
-  ```
+# Specific engines only
+python sublist3r.py -e google,crt,virustotal -d example.com
+```
 
-* **Specific Engines (Google, Yahoo, VirusTotal):**
-  ```
-  python sublist3r.py -e google,yahoo,virustotal -d example.com
-  ```
-
-* **Full Scan with JSON Output:**
-  ```
-  python sublist3r.py -d example.com -b -v -j -o output.txt
-  ```
-
-## 📚 Using Sublist3r as a Module
-
-Import Sublist3r into your Python scripts for automated workflows.
+## Using as a Module
 
 ```python
 import sublist3r
 
-# Enumerate subdomains
 subdomains = sublist3r.main(
-    domain='yahoo.com',
-    no_threads=40,          # Threads for bruteforce
-    savefile='yahoo_subdomains.txt',  # Output file
-    ports=None,             # Ports to scan
-    silent=False,           # Silent mode
-    verbose=False,          # Real-time output
-    enable_bruteforce=False, # Enable bruteforce
-    engines=None            # Specific engines
+    domain='example.com',
+    threads=40,
+    savefile='results.txt',
+    ports=None,
+    silent=False,
+    verbose=False,
+    enable_bruteforce=False,
+    engines=None,
+    json_output=False
 )
-
-print(f"Found {len(subdomains)} subdomains: {subdomains}")
 ```
 
-**Parameters:**
-- `domain`: Target domain.
-- `savefile`: Optional output file.
-- `ports`: Comma-separated TCP ports.
-- `silent`: Suppress noise.
-- `verbose`: Real-time display.
-- `enable_bruteforce`: Use SubBrute.
-- `engines`: Optional comma-separated engines (e.g., 'google,bing').
+## Subdomain Takeover Detection
 
-## 🖼️ Screenshots
+The included `takeover.py` checks discovered subdomains for dangling CNAMEs and HTTP fingerprints indicating potential subdomain takeover vulnerabilities.
 
-![Sublist3r in Action](http://www.secgeek.net/images/Sublist3r.png)
+```bash
+# From a file of subdomains
+python takeover.py -i subdomains.txt -o results.txt -t 20
 
-## 🤝 Credits
+# Quick check against a domain
+python takeover.py -d example.com -v
+```
 
-- **[Ahmed Aboul-Ela](https://twitter.com/aboul3la)**: Original author.
-- **[TheRook](https://github.com/TheRook)**: SubBrute bruteforce module.
-- **[Bitquark](https://github.com/bitquark)**: SubBrute wordlist based on **dnspop** research.
-- **[Shaheer Yasir](https://github.com/shaheeryasir)**: v3.0 enhancements (Python 3, new engines, JSON output, performance).
-- **Special Thanks:** [Ibrahim Mosaad](https://twitter.com/ibrahim_mosaad) for foundational contributions.
+Supported services: GitHub Pages, Heroku, AWS S3, Shopify, Canny.
 
-## 📄 License
+## Security Notes
 
-Sublist3r is licensed under the [GNU GPL v2](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html). See [LICENSE](LICENSE) for details.
+- Output file paths are restricted to the current working directory (path traversal protection).
+- SSL/TLS warnings are not suppressed during enumeration — MITM indicators remain visible.
+- Thread and process counts are capped at 64 to prevent resource exhaustion.
+- `takeover.py` intentionally disables certificate verification when probing dangling domains; warnings are scoped narrowly.
 
-## 🙌 Contributing
+## Credits
 
-We welcome contributions! Fork the repo, create a feature branch, and submit a PR. For issues or questions, open a ticket on GitHub.
+- [Ahmed Aboul-Ela](https://twitter.com/aboul3la) — original author
+- [TheRook](https://github.com/TheRook) — SubBrute module
+- [Bitquark](https://github.com/bitquark) — SubBrute wordlist (dnspop research)
+- [Shaheer Yasir](https://github.com/shaheeryasir) — v3.0 enhancements
 
-- Report bugs: [Issues](https://github.com/aboul3la/Sublist3r/issues)
-- Suggest features: [Discussions](https://github.com/aboul3la/Sublist3r/discussions)
+## License
 
-## 📈 Version
-
-**Current version: 3.0** (October 01, 2025)
-
----
-
-⭐ **Star this repo** if Sublist3r helps your recon workflow! Follow [@aboul3la](https://twitter.com/aboul3la) for updates. Happy hunting! 🔍
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+GNU GPL v2. See [LICENSE](LICENSE).

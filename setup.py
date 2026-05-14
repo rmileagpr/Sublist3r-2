@@ -7,7 +7,8 @@ setup(
     install_requires=[
         'dnspython>=2.0.0',
         'requests>=2.25.0',
-        'colorama>=0.4.4'  # For cross-platform colored output
+        'colorama>=0.4.4',  # For cross-platform colored output
+        'python-dotenv>=0.19.0'
     ],
     packages=find_packages() + ['.'],
     include_package_data=True,

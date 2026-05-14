@@ -24,11 +24,14 @@ from subbrute import subbrute
 import dns.resolver
 import requests
 
-# Disable SSL warnings
+# Load environment variables from .env file if present
 try:
-    requests.packages.urllib3.disable_warnings()
-except:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
     pass
+
+# SSL warnings are intentionally NOT suppressed - users should see MITM indicators
 
 # Console Colors (using colorama for cross-platform)
 try:
@@ -43,12 +46,15 @@ except ImportError:
     print("[!] Install colorama for colored output: pip install colorama")
     G = Y = B = R = W = ''
 
+# Maximum allowed thread count to prevent resource exhaustion
+MAX_THREAD_COUNT = 64
+
 def no_color():
     global G, Y, B, R, W
     G = Y = B = R = W = ''
 
 def banner():
-    print(f"""%s
+    print("""%s
                  ____        _     _ _     _   _____
                 / ___| _   _| |__ | (_)___| |_|___ / _ __
                 \\___ \\| | | | '_ \\| | / __| __| |_ \\| '__|
@@ -78,6 +84,14 @@ def parse_args():
     parser.add_argument('-j', '--json', help='Save the results to json file', default=False, action='store_true')
     parser.add_argument('-n', '--no-color', help='Output without color', default=False, action='store_true')
     return parser.parse_args()
+
+def safe_output_path(filename):
+    """Validate output path stays within the current working directory."""
+    resolved = os.path.realpath(filename)
+    cwd = os.path.realpath(os.getcwd())
+    if not (resolved == cwd or resolved.startswith(cwd + os.sep)):
+        raise SystemExit(f"Error: Output path escapes working directory: {filename}")
+    return resolved
 
 def write_file(filename, subdomains, json_output=False):
     print(f"{Y}[-] Saving results to file: {W}{R}{filename}{W}")
@@ -128,7 +142,7 @@ class EnumeratorBase(object):
         try:
             resp = self.session.get(url, headers=self.headers, timeout=self.timeout)
             resp.raise_for_status()
-        except Exception:
+        except requests.RequestException:
             resp = None
         return self.get_response(resp)
 
@@ -238,7 +252,7 @@ class GoogleEnum(EnumeratorBaseThreaded):
                         if self.verbose:
                             self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
                         self.subdomains.append(subdomain)
-        except Exception:
+        except (re.error, ValueError, AttributeError):
             pass
         return links_list
 
@@ -280,7 +294,7 @@ class YahooEnum(EnumeratorBaseThreaded):
             links2 = link_regx2.findall(resp)
             links_list = links + links2
             for link in links_list:
-                link = re.sub(r"<(\/)?b>", "", link)  # Fixed raw string
+                link = re.sub(r"<(\/)?b>", "", link)
                 if not link.startswith('http'):
                     link = "http://" + link
                 subdomain = urlparse(link).netloc
@@ -290,11 +304,12 @@ class YahooEnum(EnumeratorBaseThreaded):
                     if self.verbose:
                         self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
                     self.subdomains.append(subdomain.strip())
-        except Exception:
+        except (re.error, ValueError, AttributeError):
             pass
         return links_list
 
     def should_sleep(self):
+        time.sleep(1)
         return
 
     def get_page(self, num):
@@ -332,9 +347,13 @@ class AskEnum(EnumeratorBaseThreaded):
                     if self.verbose:
                         self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
                     self.subdomains.append(subdomain.strip())
-        except Exception:
+        except (re.error, ValueError, AttributeError):
             pass
         return links_list
+
+    def should_sleep(self):
+        time.sleep(1)
+        return
 
     def get_page(self, num):
         return num + 1
@@ -367,7 +386,7 @@ class BingEnum(EnumeratorBaseThreaded):
             links2 = link_regx2.findall(resp)
             links_list = links + links2
             for link in links_list:
-                link = re.sub(r'<(\/)?strong>|<span.*?>|<|>', '', link)  # Fixed raw string
+                link = re.sub(r'<(\/)?strong>|<span.*?>|<|>', '', link)
                 if not link.startswith('http'):
                     link = "http://" + link
                 subdomain = urlparse(link).netloc
@@ -375,9 +394,13 @@ class BingEnum(EnumeratorBaseThreaded):
                     if self.verbose:
                         self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
                     self.subdomains.append(subdomain.strip())
-        except Exception:
+        except (re.error, ValueError, AttributeError):
             pass
         return links_list
+
+    def should_sleep(self):
+        time.sleep(1)
+        return
 
     def generate_query(self):
         if self.subdomains:
@@ -407,7 +430,7 @@ class BaiduEnum(EnumeratorBaseThreaded):
         try:
             links = link_regx.findall(resp)
             for link in links:
-                link = re.sub(r'<.*?>|>|<|&nbsp;', '', link)  # Fixed raw string
+                link = re.sub(r'<.*?>|>|<|&nbsp;', '', link)
                 if not link.startswith('http'):
                     link = "http://" + link
                 subdomain = urlparse(link).netloc
@@ -418,7 +441,7 @@ class BaiduEnum(EnumeratorBaseThreaded):
                         if self.verbose:
                             self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
                         self.subdomains.append(subdomain.strip())
-        except Exception:
+        except (re.error, ValueError, AttributeError):
             pass
         if not found_newdomain and subdomain_list:
             self.querydomain = self.findsubs(subdomain_list)
@@ -458,7 +481,7 @@ class NetcraftEnum(EnumeratorBaseThreaded):
         cookies = cookies or {}
         try:
             resp = self.session.get(url, headers=self.headers, timeout=self.timeout, cookies=cookies)
-        except Exception as e:
+        except requests.RequestException as e:
             self.print_(e)
             resp = None
         return resp
@@ -477,7 +500,7 @@ class NetcraftEnum(EnumeratorBaseThreaded):
         cookies = dict()
         cookies_list = cookie[0:cookie.find(';')].split("=")
         cookies[cookies_list[0]] = cookies_list[1]
-        # Fixed for Python 3: use unquote instead of urllib.unquote
+        # Netcraft requires SHA-1 for its cookie verification handshake - cannot change to SHA-256
         cookies['netcraft_js_verification_response'] = hashlib.sha1(unquote(cookies_list[1]).encode('utf-8')).hexdigest()
         return cookies
 
@@ -515,7 +538,7 @@ class NetcraftEnum(EnumeratorBaseThreaded):
                     if self.verbose:
                         self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
                     self.subdomains.append(subdomain.strip())
-        except Exception:
+        except (re.error, ValueError, AttributeError):
             pass
         return links_list
 
@@ -542,7 +565,8 @@ class DNSdumpster(EnumeratorBaseThreaded):
                     self.print_(f"{R}{self.engine_name}: {W}{host}")
                 is_valid = True
                 self.live_subdomains.append(host)
-        except:
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers,
+                dns.resolver.Timeout, dns.exception.DNSException, IndexError):
             pass
         self.lock.release()
         return is_valid
@@ -556,31 +580,40 @@ class DNSdumpster(EnumeratorBaseThreaded):
                 resp = self.session.get(url, headers=headers, timeout=self.timeout)
             else:
                 resp = self.session.post(url, data=params, headers=headers, timeout=self.timeout)
-        except Exception as e:
+        except requests.RequestException as e:
             self.print_(e)
             resp = None
         return self.get_response(resp)
 
     def get_csrftoken(self, resp):
         csrf_regex = re.compile(r'<input type="hidden" name="csrfmiddlewaretoken" value="(.*?)">', re.S)
-        token = csrf_regex.findall(resp)[0]
-        return token.strip()
+        tokens = csrf_regex.findall(resp)
+        if not tokens:
+            return None
+        return tokens[0].strip()
 
     def enumerate(self):
         self.lock = threading.BoundedSemaphore(value=70)
         resp = self.req('GET', self.base_url)
         token = self.get_csrftoken(resp)
+        if not token:
+            self.print_(R + "[!] DNSdumpster: Could not obtain CSRF token" + W)
+            return self.subdomains
         params = {'csrfmiddlewaretoken': token, 'targetip': self.domain}
         post_resp = self.req('POST', self.base_url, params)
         self.extract_domains(post_resp)
+        # Fixed: start all threads first, then join - was previously sequential
+        threads = []
         for subdomain in self.subdomains:
             t = threading.Thread(target=self.check_host, args=(subdomain,))
             t.start()
+            threads.append(t)
+        for t in threads:
             t.join()
         return self.live_subdomains
 
     def extract_domains(self, resp):
-        tbl_regex = re.compile(r'<a name="hostanchor"><\/a>Host Records.*?<table.*?>(.*?)</table>', re.S)  # Fixed raw string
+        tbl_regex = re.compile(r'<a name="hostanchor"><\/a>Host Records.*?<table.*?>(.*?)</table>', re.S)
         link_regex = re.compile(r'<td class="col-md-4">(.*?)<br>', re.S)
         links = []
         try:
@@ -615,7 +648,7 @@ class Virustotal(EnumeratorBaseThreaded):
         try:
             resp = self.session.get(url, headers=self.headers, timeout=self.timeout)
             resp.raise_for_status()
-        except Exception as e:
+        except requests.RequestException as e:
             self.print_(f"{R}[!] VT Error: {e}{W}")
             resp = None
         return self.get_response(resp)
@@ -641,49 +674,13 @@ class Virustotal(EnumeratorBaseThreaded):
                     self.url = data['links']['next']
                 else:
                     self.url = None
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, KeyError, TypeError):
                 break
             time.sleep(15)  # Rate limit
         return self.subdomains
 
     def extract_domains(self, resp):
         pass
-
-# ThreatCrowd (from original, note: ThreatCrowd is deprecated, but keeping for compatibility)
-class ThreatCrowd(EnumeratorBaseThreaded):
-    def __init__(self, domain, subdomains=None, q=None, silent=False, verbose=True):
-        subdomains = subdomains or []
-        base_url = 'https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={domain}'
-        self.engine_name = "ThreatCrowd"
-        self.q = q
-        super(ThreatCrowd, self).__init__(base_url, self.engine_name, domain, subdomains, q=q, silent=silent, verbose=verbose)
-
-    def req(self, url):
-        try:
-            resp = self.session.get(url, headers=self.headers, timeout=self.timeout)
-        except Exception:
-            resp = None
-        return self.get_response(resp)
-
-    def enumerate(self):
-        url = self.base_url.format(domain=self.domain)
-        resp = self.req(url)
-        self.extract_domains(resp)
-        return self.subdomains
-
-    def extract_domains(self, resp):
-        try:
-            links = json.loads(resp)['subdomains']
-            for link in links:
-                subdomain = link.strip()
-                if not subdomain.endswith(self.domain):
-                    continue
-                if subdomain not in self.subdomains and subdomain != self.domain:
-                    if self.verbose:
-                        self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
-                    self.subdomains.append(subdomain.strip())
-        except Exception as e:
-            pass
 
 # CrtSearch (from original)
 class CrtSearch(EnumeratorBaseThreaded):
@@ -697,7 +694,7 @@ class CrtSearch(EnumeratorBaseThreaded):
     def req(self, url):
         try:
             resp = self.session.get(url, headers=self.headers, timeout=self.timeout)
-        except Exception:
+        except requests.RequestException:
             resp = None
         return self.get_response(resp)
 
@@ -728,7 +725,7 @@ class CrtSearch(EnumeratorBaseThreaded):
                         if self.verbose:
                             self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
                         self.subdomains.append(subdomain.strip())
-        except Exception as e:
+        except (re.error, ValueError, AttributeError):
             pass
 
 # PassiveDNS (from original)
@@ -743,7 +740,7 @@ class PassiveDNS(EnumeratorBaseThreaded):
     def req(self, url):
         try:
             resp = self.session.get(url, headers=self.headers, timeout=self.timeout)
-        except Exception as e:
+        except requests.RequestException:
             resp = None
         return self.get_response(resp)
 
@@ -763,7 +760,7 @@ class PassiveDNS(EnumeratorBaseThreaded):
                     if self.verbose:
                         self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
                     self.subdomains.append(subdomain.strip())
-        except Exception as e:
+        except (json.JSONDecodeError, TypeError, ValueError):
             pass
 
 # BufferOverRunEnum (new in v2, kept)
@@ -779,7 +776,7 @@ class BufferOverRunEnum(EnumeratorBaseThreaded):
         try:
             resp = self.session.get(url, headers=self.headers, timeout=self.timeout)
             resp.raise_for_status()
-        except Exception:
+        except requests.RequestException:
             resp = None
         return self.get_response(resp)
 
@@ -798,7 +795,7 @@ class BufferOverRunEnum(EnumeratorBaseThreaded):
                         if self.verbose:
                             self.print_(f"{R}{self.engine_name}: {W}{subdomain}")
                         self.subdomains.append(subdomain)
-        except Exception as e:
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError) as e:
             self.print_(f"{R}[!] BufferOverRun Error: {e}{W}")
         return self.subdomains
 
@@ -818,7 +815,7 @@ class CertSpotterEnum(EnumeratorBaseThreaded):
         try:
             resp = self.session.get(url, headers=self.headers, timeout=self.timeout)
             resp.raise_for_status()
-        except Exception:
+        except requests.RequestException:
             resp = None
         return self.get_response(resp)
 
@@ -834,7 +831,7 @@ class CertSpotterEnum(EnumeratorBaseThreaded):
                         if self.verbose:
                             self.print_(f"{R}{self.engine_name}: {W}{dns_name}")
                         self.subdomains.append(dns_name)
-        except Exception as e:
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError) as e:
             self.print_(f"{R}[!] CertSpotter Error: {e}{W}")
         return self.subdomains
 
@@ -849,7 +846,6 @@ class PortScan:
 
     def port_scan(self, host, ports):
         openports = []
-        self.lock.acquire()
         for port in ports:
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -858,14 +854,14 @@ class PortScan:
                 if result == 0:
                     openports.append(port)
                 s.close()
-            except Exception:
+            except (socket.error, OSError, ValueError):
                 pass
-        self.lock.release()
         if openports:
-            print(f"{G}{host}{W} - {R}Found open ports:{W} {Y}{', '.join(openports)}{W}")
+            with self.lock:
+                print(f"{G}{host}{W} - {R}Found open ports:{W} {Y}{', '.join(openports)}{W}")
 
     def run(self):
-        self.lock = threading.BoundedSemaphore(value=50)
+        self.lock = threading.Lock()
         threads = []
         for subdomain in self.subdomains:
             t = threading.Thread(target=self.port_scan, args=(subdomain, self.ports))
@@ -877,6 +873,9 @@ class PortScan:
 def main(domain, threads, savefile, ports, silent, verbose, enable_bruteforce, engines, json_output):
     bruteforce_list = set()
     search_list = set()
+
+    # Cap thread count
+    threads = min(threads, MAX_THREAD_COUNT)
 
     subdomains_queue = multiprocessing.Manager().list()
 
@@ -909,11 +908,10 @@ def main(domain, threads, savefile, ports, silent, verbose, enable_bruteforce, e
         'netcraft': NetcraftEnum,
         'dnsdumpster': DNSdumpster,
         'virustotal': Virustotal,
-        'threatcrowd': ThreatCrowd,
         'crt': CrtSearch,
         'passivedns': PassiveDNS,
         'bufferover': BufferOverRunEnum,
-        'certspotter': CertSpotterEnum  # New in v3.0
+        'certspotter': CertSpotterEnum
     }
 
     chosen_enums = []
@@ -921,8 +919,8 @@ def main(domain, threads, savefile, ports, silent, verbose, enable_bruteforce, e
     if engines is None:
         chosen_enums = [
             GoogleEnum, BingEnum, YahooEnum, AskEnum, BaiduEnum,
-            NetcraftEnum, DNSdumpster, Virustotal, ThreatCrowd,
-            CrtSearch, BufferOverRunEnum, PassiveDNS, CertSpotterEnum  # Added CertSpotter
+            NetcraftEnum, DNSdumpster, Virustotal,
+            CrtSearch, BufferOverRunEnum, PassiveDNS, CertSpotterEnum
         ]
     else:
         engines_list = [e.lower().strip() for e in engines.split(',')]
@@ -961,7 +959,7 @@ def main(domain, threads, savefile, ports, silent, verbose, enable_bruteforce, e
             write_file(savefile, all_subdomains, json_output=False)
 
         if json_output:
-            json_filename = f"{parsed_domain}.json"
+            json_filename = safe_output_path(f"{parsed_domain}.json")
             write_file(json_filename, all_subdomains, json_output=True)
 
         if not silent:
@@ -984,7 +982,7 @@ def interactive():
     args = parse_args()
     domain = args.domain
     threads = args.threads
-    savefile = args.output
+    savefile = safe_output_path(args.output) if args.output else args.output
     ports = args.ports
     enable_bruteforce = args.bruteforce
     verbose = args.verbose or args.verbose is None

@@ -10,17 +10,23 @@ Requirements:
   pip install dnspython requests colorama
 """
 import argparse
+import os
 import sys
 import time
+import warnings
 import requests
 import urllib3
+
+# Load environment variables from .env file if present
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import dns.resolver
 import dns.exception
 import threading
-
-# Silence TLS warnings (we use verify=False on purpose for dangling domains)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Console Colors (using colorama for cross-platform)
 try:
@@ -31,7 +37,7 @@ try:
     B = '\033[94m'  # blue
     R = '\033[91m'  # red
     W = '\033[0m'   # white
-except Exception:
+except ImportError:
     G = Y = B = R = W = ''
 
 # Lock for thread-safe prints and writes
@@ -39,11 +45,11 @@ LOCK = threading.Lock()
 
 def banner():
     print(f"""{R}
-    ╔══════════════════════════════════════════════════════════════╗
-    ║  Subdomain Takeover Extension for Sublist3r v3.0             ║
-    ║  Detects dangling CNAMEs & HTTP fingerprints                 ║
-    ║  Provides evidence snippets and confidence levels            ║
-    ╚══════════════════════════════════════════════════════════════╝{W}{Y}
+    +==============================================================+
+    |  Subdomain Takeover Extension for Sublist3r v3.0              |
+    |  Detects dangling CNAMEs & HTTP fingerprints                  |
+    |  Provides evidence snippets and confidence levels             |
+    +==============================================================+{W}{Y}
     """)
 
 # --- Fingerprints ---
@@ -86,14 +92,13 @@ def resolve_cname(subdomain):
         return ["NXDOMAIN"]
     except (dns.resolver.NoAnswer, dns.exception.DNSException):
         return []
-    return []
 
 def resolve_a(name):
     try:
         resolver = dns.resolver.Resolver()
         answers = resolver.resolve(name, 'A')
         return [r.address for r in answers]
-    except Exception:
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.DNSException):
         return []
 
 def is_dangling_cname(target):
@@ -107,7 +112,11 @@ def check_http_fingerprint(subdomain, keywords, verbose=False):
     for scheme in ("https", "http"):
         url = f"{scheme}://{subdomain}/"
         try:
-            resp = requests.get(url, timeout=6, verify=False, allow_redirects=True)
+            # verify=False is intentional: we are probing dangling/unclaimed domains
+            # that will have invalid or missing TLS certificates by definition
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+                resp = requests.get(url, timeout=6, verify=False, allow_redirects=True)
         except requests.RequestException as e:
             if verbose:
                 with LOCK:
@@ -178,6 +187,14 @@ def check_takeover(subdomain, verbose=False):
 
     return {"vulnerable": False}
 
+def safe_output_path(filename):
+    """Validate output path stays within the current working directory."""
+    resolved = os.path.realpath(filename)
+    cwd = os.path.realpath(os.getcwd())
+    if not (resolved == cwd or resolved.startswith(cwd + os.sep)):
+        raise SystemExit(f"Error: Output path escapes working directory: {filename}")
+    return resolved
+
 # --- Processing ---
 def process_subdomain(sub, verbose=False, output_file=None):
     with LOCK:
@@ -209,6 +226,9 @@ def main():
     parser.add_argument("-t", "--threads", type=int, default=10, help="Concurrent threads")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose debug")
     args = parser.parse_args()
+
+    if args.output:
+        args.output = safe_output_path(args.output)
 
     banner()
     subs = []

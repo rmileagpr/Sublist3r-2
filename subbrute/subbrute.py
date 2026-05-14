@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 #
 # SubBrute v1.3
@@ -29,6 +28,10 @@ if sys.platform.startswith('win'):
     import threading
     multiprocessing.Process = threading.Thread
 
+# Maximum allowed process/thread count to prevent resource exhaustion
+MAX_PROCESS_COUNT = 64
+
+
 class VerifyNameservers(multiprocessing.Process):
     def __init__(self, target, record_type, resolver_q, resolver_list, wildcards):
         multiprocessing.Process.__init__(self, target=self.run)
@@ -45,13 +48,15 @@ class VerifyNameservers(multiprocessing.Process):
         resolver = dns.resolver.Resolver()
         self.target = target
         self.most_popular_website = "www.google.com"
-        self.backup_resolver = resolver.nameservers + ['127.0.0.1', '8.8.8.8', '8.8.4.4']
+        # Removed 127.0.0.1 - avoid leaking queries to local DNS
+        self.backup_resolver = resolver.nameservers + ['8.8.8.8', '8.8.4.4']
         resolver.timeout = 1
         resolver.lifetime = 1
         try:
             resolver.nameservers = ['8.8.8.8']
             resolver.query(self.most_popular_website, self.record_type)
-        except:
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers,
+                dns.resolver.Timeout, dns.exception.DNSException):
             resolver = dns.resolver.Resolver()
         self.resolver = resolver
 
@@ -66,8 +71,7 @@ class VerifyNameservers(multiprocessing.Process):
                 print(f"[DEBUG] Added nameserver: {nameserver}", file=sys.stderr)
                 keep_trying = False
             except Exception as e:
-                if isinstance(e, (Queue.Full, queue.Full)):
-                    keep_trying = True
+                keep_trying = True
 
     def verify(self, nameserver_list):
         added_resolver = False
@@ -94,7 +98,7 @@ class VerifyNameservers(multiprocessing.Process):
             self.verify(self.backup_resolver)
         try:
             self.resolver_q.put(False, timeout=1)
-        except:
+        except (OSError, ValueError):
             pass
 
     def find_wildcards(self, host):
@@ -103,7 +107,8 @@ class VerifyNameservers(multiprocessing.Process):
             if len(wildtest):
                 print(f"[DEBUG] Spam DNS detected: {host}", file=sys.stderr)
                 return False
-        except:
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers,
+                dns.resolver.Timeout, dns.exception.DNSException):
             pass
         test_counter = 8
         looking_for_wildcards = True
@@ -148,7 +153,7 @@ class Lookup(multiprocessing.Process):
             if ret == False:
                 self.resolver_q.put(False)
                 ret = []
-        except:
+        except Empty:
             pass
         return ret
 
@@ -276,11 +281,12 @@ def extract_hosts(data, hostname):
     return ret
 
 # Return a list of unique subdomains, sorted by frequency
-domain_match = re.compile("([a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*)+")
+domain_match = re.compile(r"([a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*)+")
 def extract_subdomains(file_name):
     global domain_match
     subs = {}
-    sub_file = open(file_name).read()
+    with open(file_name) as f:
+        sub_file = f.read()
     f_all = re.findall(domain_match, sub_file)
     del sub_file
     for i in f_all:
@@ -304,7 +310,6 @@ def extract_subdomains(file_name):
 
 def print_target(target, record_type=None, subdomains="names.txt", resolve_list="resolvers.txt", process_count=16, output=False, json_output=False, found_subdomains=[], verbose=False):
     subdomains_list = []
-    # Fixed: Call run only once
     for result in run(target, record_type, subdomains, resolve_list, process_count):
         (hostname, record_type, response) = result
         if not record_type:
@@ -315,7 +320,6 @@ def print_target(target, record_type=None, subdomains="names.txt", resolve_list=
             if verbose:
                 print(result_str)
             subdomains_list.append(result_str)
-            # Handle output files
             if output:
                 output.write(f"{result_str}\n")
                 output.flush()
@@ -325,6 +329,9 @@ def print_target(target, record_type=None, subdomains="names.txt", resolve_list=
     return set(subdomains_list)
 
 def run(target, record_type=None, subdomains="names.txt", resolve_list="resolvers.txt", process_count=16):
+    # Cap process count to prevent resource exhaustion
+    process_count = min(process_count, MAX_PROCESS_COUNT)
+
     subdomains = check_open(subdomains)
     resolve_list = check_open(resolve_list)
     if (len(resolve_list) / 16) < process_count:
@@ -378,7 +385,7 @@ def run(target, record_type=None, subdomains="names.txt", resolve_list="resolver
     print("[DEBUG] killing nameserver process", file=sys.stderr)
     try:
         killproc(pid=verify_nameservers_proc.pid)
-    except:
+    except (OSError, AttributeError):
         verify_nameservers_proc.end()
     print("[DEBUG] End", file=sys.stderr)
 
@@ -390,10 +397,10 @@ def killproc(signum=0, frame=0, pid=False):
             kernel32 = ctypes.windll.kernel32
             handle = kernel32.OpenProcess(1, 0, pid)
             kernel32.TerminateProcess(handle, 0)
-        except:
+        except OSError:
             pass
     else:
-        os.kill(pid, 9)
+        os.kill(pid, signal.SIGTERM)
 
 verbose = False
 def trace(*args, **kwargs):
@@ -413,8 +420,9 @@ def error(*args, **kwargs):
 def check_open(input_file):
     ret = []
     try:
-        ret = open(input_file).readlines()
-    except:
+        with open(input_file) as f:
+            ret = f.readlines()
+    except (FileNotFoundError, PermissionError, OSError):
         error("File not found:", input_file)
     if not len(ret):
         error("File is empty:", input_file)
@@ -425,8 +433,8 @@ def signal_init():
     try:
         signal.signal(signal.SIGTSTP, killproc)
         signal.signal(signal.SIGQUIT, killproc)
-    except:
-        pass  # Windows
+    except (AttributeError, OSError):
+        pass  # Windows - these signals don't exist
 
 if __name__ == "__main__":
     if getattr(sys, 'frozen', False):
@@ -475,14 +483,14 @@ if __name__ == "__main__":
     if options.output:
         try:
             output_file = open(options.output, "w")
-        except:
+        except (PermissionError, OSError):
             error("Failed writing to file:", options.output)
 
     json_file = False
     if options.json:
         try:
             json_file = open(options.json, "w")
-        except:
+        except (PermissionError, OSError):
             error("Failed writing to file:", options.json)
 
     record_type = False
